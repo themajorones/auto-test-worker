@@ -1,4 +1,4 @@
-package dev.themajorones.android_test_worker.service.task;
+package dev.themajorones.android_test_worker.service.handler;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
@@ -12,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 import dev.themajorones.android_test_worker.repository.AndroidVMRepository;
 import dev.themajorones.android_test_worker.repository.DockerRepository;
 import dev.themajorones.android_test_worker.repository.TaskLogRepository;
+import dev.themajorones.android_test_worker.service.task.TaskHandler;
 import dev.themajorones.models.client.DockerClient;
 import dev.themajorones.models.constants.ConnectionStatusConstant;
 import dev.themajorones.models.constants.TaskLogConstant;
@@ -19,7 +20,7 @@ import dev.themajorones.models.dto.TaskCommandEnvelope;
 import dev.themajorones.models.entity.AndroidVM;
 import dev.themajorones.models.entity.AndroidVMRecord;
 import dev.themajorones.models.entity.Docker;
-import dev.themajorones.models.entity.RetroidAndroidVM;
+import dev.themajorones.models.entity.RedroidAndroidVM;
 import dev.themajorones.models.entity.TaskLog;
 import dev.themajorones.models.mapper.AndroidVmMapper;
 import lombok.RequiredArgsConstructor;
@@ -56,12 +57,12 @@ public class CreateAndroidVMTaskHandler implements TaskHandler {
 
         LOG.info("Starting CreateAndroidVM for taskLogId={}", taskLog.getId());
 
-        RetroidAndroidVM vm = null;
+        RedroidAndroidVM vm = null;
         try {
             JsonNode content = objectMapper.readTree(taskLog.getContent());
             Integer androidVMId = content.path("androidVMId").intValue(0);
             AndroidVMRecord record = androidVMRepository.findById(androidVMId).orElseThrow(() -> new IllegalArgumentException("Android VM not found"));
-            vm = asRetroid(AndroidVmMapper.fromRecord(record));
+            vm = asRedroid(AndroidVmMapper.fromRecord(record));
             Docker docker = dockerRepository.findById(record.getDocker().getId()).orElseThrow(() -> new IllegalArgumentException("Docker connection not found"));
 
             vm.setStatus(ConnectionStatusConstant.CREATING);
@@ -134,9 +135,9 @@ public class CreateAndroidVMTaskHandler implements TaskHandler {
         }
     }
 
-    private RetroidAndroidVM asRetroid(AndroidVM vm) {
-        if (vm instanceof RetroidAndroidVM retroid) {
-            return retroid;
+    private RedroidAndroidVM asRedroid(AndroidVM vm) {
+        if (vm instanceof RedroidAndroidVM redroid) {
+            return redroid;
         }
         throw new IllegalArgumentException("Unsupported Android VM type: " + vm.getVmType());
     }
