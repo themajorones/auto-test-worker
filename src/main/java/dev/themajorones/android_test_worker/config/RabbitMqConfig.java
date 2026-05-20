@@ -19,12 +19,12 @@ public class RabbitMqConfig {
     }
 
     @Bean
-    public Queue connectionManagerQueue() {
-        return RabbitMqTopology.connectionManagerQueue();
+    public Queue androidQueue() {
+        return RabbitMqTopology.androidQueue();
     }
 
     @Bean
-    public Binding connectionManagerBinding(Queue connectionManagerQueue, DirectExchange directExchange) {
-        return RabbitMqTopology.connectionManagerBinding(connectionManagerQueue, directExchange);
+    public Binding androidBinding(Queue androidQueue, DirectExchange directExchange) {
+        return RabbitMqTopology.androidBinding(androidQueue, directExchange);
     }
 }

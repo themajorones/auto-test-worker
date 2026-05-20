@@ -25,7 +25,7 @@ public class TaskCommandListener {
     private final TaskMessageAckService taskMessageAckService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    @RabbitListener(queues = RabbitMqConstant.Queue.ConnectionManager.NAME, ackMode = "MANUAL")
+    @RabbitListener(queues = RabbitMqConstant.Queue.Android.NAME, ackMode = "MANUAL")
     public void listen(
         String message,
         Channel channel,
