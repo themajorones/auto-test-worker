@@ -7,6 +7,7 @@ import org.springframework.amqp.rabbit.annotation.EnableRabbit;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import dev.themajorones.models.constants.RabbitMqConstant;
 import dev.themajorones.models.queue.RabbitMqTopology;
 
 @Configuration
@@ -19,12 +20,12 @@ public class RabbitMqConfig {
     }
 
     @Bean
-    public Queue androidQueue() {
+    public Queue createAndroidQueue() {
         return RabbitMqTopology.androidQueue();
     }
 
     @Bean
-    public Binding androidBinding(Queue androidQueue, DirectExchange directExchange) {
-        return RabbitMqTopology.androidBinding(androidQueue, directExchange);
+    public Binding createAndroidBinding(Queue createAndroidQueue, DirectExchange directExchange) {
+        return RabbitMqTopology.androidBinding(createAndroidQueue, directExchange);
     }
 }

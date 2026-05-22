@@ -1,15 +1,14 @@
 package dev.themajorones.android_test_worker.service.task;
 
-import java.util.List;
-
 import com.rabbitmq.client.Channel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
-import org.springframework.stereotype.Service;
 import org.springframework.amqp.support.AmqpHeaders;
 import org.springframework.messaging.handler.annotation.Header;
+import org.springframework.stereotype.Service;
 
+import dev.themajorones.android_test_worker.service.handler.CreateAndroidTaskHandler;
 import dev.themajorones.models.constants.RabbitMqConstant;
 import dev.themajorones.models.dto.TaskCommandEnvelope;
 import lombok.RequiredArgsConstructor;
@@ -17,11 +16,11 @@ import tools.jackson.databind.ObjectMapper;
 
 @Service
 @RequiredArgsConstructor
-public class TaskCommandListener {
+public class CreateAndroidTaskListener {
 
-    private static final Logger LOGGER = LoggerFactory.getLogger(TaskCommandListener.class);
+    private static final Logger LOGGER = LoggerFactory.getLogger(CreateAndroidTaskListener.class);
 
-    private final List<TaskHandler> handlers;
+    private final CreateAndroidTaskHandler taskHandler;
     private final TaskMessageAckService taskMessageAckService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -33,14 +32,10 @@ public class TaskCommandListener {
     ) {
         try {
             TaskCommandEnvelope command = objectMapper.readValue(message, TaskCommandEnvelope.class);
-            TaskHandler handler = handlers.stream()
-                .filter(candidate -> candidate.supports(command.getType()))
-                .findFirst()
-                .orElseThrow(() -> new IllegalArgumentException("No handler for task type " + command.getType()));
-            handler.handle(command);
+            taskHandler.handle(command);
             taskMessageAckService.ack(channel, deliveryTag);
         } catch (Exception ex) {
-            LOGGER.error("Failed to process task command: {}", message, ex);
+            LOGGER.error("Failed to process create Android task command: {}", message, ex);
             taskMessageAckService.nack(channel, deliveryTag, false);
         }
     }
