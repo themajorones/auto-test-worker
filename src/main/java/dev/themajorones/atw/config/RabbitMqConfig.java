@@ -1,4 +1,4 @@
-package dev.themajorones.android_test_worker.config;
+package dev.themajorones.atw.config;
 
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.DirectExchange;

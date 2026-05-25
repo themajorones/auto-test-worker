@@ -1,4 +1,4 @@
-package dev.themajorones.android_test_worker.web.rest;
+package dev.themajorones.atw.web.rest;
 
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;

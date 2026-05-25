@@ -1,12 +1,12 @@
 spring:
   application:
-    name: android_test_worker
+    name: atw
   profiles:
     default: dev
   config:
     import:
       - optional:file:.env[.properties]
-      - optional:file:android_test_worker/.env[.properties]
+      - optional:file:atw/.env[.properties]
   jpa:
     hibernate:
       ddl-auto: update

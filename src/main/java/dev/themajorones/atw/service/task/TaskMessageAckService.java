@@ -1,4 +1,4 @@
-package dev.themajorones.android_test_worker.service.task;
+package dev.themajorones.atw.service.task;
 
 import org.springframework.amqp.AmqpException;
 import org.springframework.stereotype.Service;

@@ -9,10 +9,10 @@
 		<relativePath/> <!-- lookup parent from repository -->
 	</parent>
 	<groupId>dev.themajorones</groupId>
-	<artifactId>android_test_worker</artifactId>
+	<artifactId>atw</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
 	<packaging>war</packaging>
-	<name>android_test_worker</name>
+	<name>atw</name>
 	<description/>
 	<url/>
 	<licenses>

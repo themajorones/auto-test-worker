@@ -1,4 +1,4 @@
-package dev.themajorones.android_test_worker.service.handler;
+package dev.themajorones.atw.service.handler;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
@@ -9,10 +9,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import dev.themajorones.android_test_worker.repository.AndroidRepository;
-import dev.themajorones.android_test_worker.repository.DockerRepository;
-import dev.themajorones.android_test_worker.repository.TaskLogRepository;
-import dev.themajorones.android_test_worker.service.task.TaskHandler;
+import dev.themajorones.atw.repository.AndroidRepository;
+import dev.themajorones.atw.repository.DockerRepository;
+import dev.themajorones.atw.repository.TaskLogRepository;
+import dev.themajorones.atw.service.task.TaskHandler;
 import dev.themajorones.models.client.DockerClient;
 import dev.themajorones.models.constants.TaskLogConstant;
 import dev.themajorones.models.dto.TaskCommandEnvelope;

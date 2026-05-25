@@ -1,4 +1,4 @@
-package dev.themajorones.android_test_worker.service.task;
+package dev.themajorones.atw.service.task;
 
 import com.rabbitmq.client.Channel;
 import org.slf4j.Logger;
@@ -8,7 +8,7 @@ import org.springframework.amqp.support.AmqpHeaders;
 import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Service;
 
-import dev.themajorones.android_test_worker.service.handler.CreateAndroidTaskHandler;
+import dev.themajorones.atw.service.handler.CreateAndroidTaskHandler;
 import dev.themajorones.models.constants.RabbitMqConstant;
 import dev.themajorones.models.dto.TaskCommandEnvelope;
 import lombok.RequiredArgsConstructor;

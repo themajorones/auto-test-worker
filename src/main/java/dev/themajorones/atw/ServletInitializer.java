@@ -1,4 +1,4 @@
-package dev.themajorones.android_test_worker;
+package dev.themajorones.atw;
 
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.web.servlet.support.SpringBootServletInitializer;
@@ -7,7 +7,7 @@ public class ServletInitializer extends SpringBootServletInitializer {
 
 	@Override
 	protected SpringApplicationBuilder configure(SpringApplicationBuilder application) {
-		return application.sources(AndroidTestWorkerApplication.class);
+		return application.sources(AtwApplication.class);
 	}
 
 }

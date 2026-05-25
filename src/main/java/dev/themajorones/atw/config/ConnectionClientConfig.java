@@ -1,4 +1,4 @@
-package dev.themajorones.android_test_worker.config;
+package dev.themajorones.atw.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
