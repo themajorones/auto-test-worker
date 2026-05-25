@@ -14,6 +14,7 @@ import dev.themajorones.atw.repository.DockerRepository;
 import dev.themajorones.atw.repository.TaskLogRepository;
 import dev.themajorones.atw.service.task.TaskHandler;
 import dev.themajorones.models.client.DockerClient;
+import dev.themajorones.models.constants.AndroidType;
 import dev.themajorones.models.constants.TaskLogConstant;
 import dev.themajorones.models.dto.TaskCommandEnvelope;
 import dev.themajorones.models.entity.Android;
@@ -54,16 +55,22 @@ public class CreateAndroidTaskHandler implements TaskHandler {
         taskLog.setStatus(TaskLogConstant.Status.RUNNING).setStartedAt(System.currentTimeMillis()).setEndedAt(null).setResult(null);
         taskLogRepository.save(taskLog);
 
-        LOG.info("Starting CreateAndroid for taskLogId={}", taskLog.getId());
+        LOG.info("Received CreateAndroid task taskLogId={}", taskLog.getId());
 
         Android android;
         try {
             JsonNode content = objectMapper.readTree(taskLog.getContent());
             Integer androidId = content.path("androidId").intValue(0);
+            LOG.info("Loading Android record androidId={} taskLogId={}", androidId, taskLog.getId());
             android = androidRepository.findById(androidId).orElseThrow(() -> new IllegalArgumentException("Android not found"));
+            if (!AndroidType.REDROID.name().equalsIgnoreCase(android.getType())) {
+                throw new IllegalArgumentException("ATW only supports Redroid Android tasks");
+            }
             Docker docker = dockerRepository.findById(android.getDocker().getId()).orElseThrow(() -> new IllegalArgumentException("Docker connection not found"));
 
+            LOG.info("Checking Android image image={} dockerId={} taskLogId={}", android.getImage(), docker.getId(), taskLog.getId());
             if (!dockerClient.imageExists(docker.getBaseUrl(), android.getImage())) {
+                LOG.info("Pulling Android image image={} dockerId={} taskLogId={}", android.getImage(), docker.getId(), taskLog.getId());
                 dockerClient.pullImage(docker.getBaseUrl(), android.getImage());
             }
 
@@ -81,13 +88,18 @@ public class CreateAndroidTaskHandler implements TaskHandler {
             androidRepository.save(AndroidMapper.toRecord(android));
 
             taskLog.setStatus(TaskLogConstant.Status.SUCCESS).setEndedAt(System.currentTimeMillis()).setResult(JsonUtils.writeJson(objectMapper, Map.of(
+                "status", "OK",
                 "androidId", android.getId(),
                 "containerId", containerId,
                 "adbHost", adbHost,
                 "adbPort", adbPort
             ), "Unable to serialize task result"));
             taskLogRepository.save(taskLog);
-        } catch (InterruptedException | JacksonException ex) {
+            LOG.info("Completed CreateAndroid task taskLogId={} androidId={} result=OK", taskLog.getId(), android.getId());
+        } catch (IllegalArgumentException | InterruptedException | JacksonException ex) {
+            if (ex instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
             LOG.error("Failed to create Android for taskLogId={}", taskLog.getId(), ex);
             taskLog.setStatus(TaskLogConstant.Status.FAILED).setResult(JsonUtils.writeJson(objectMapper, errorResult(ex), "Unable to serialize task result")).setEndedAt(System.currentTimeMillis());
             taskLogRepository.save(taskLog);
@@ -113,6 +125,7 @@ public class CreateAndroidTaskHandler implements TaskHandler {
 
     private Map<String, Object> errorResult(Exception ex) {
         Map<String, Object> result = new LinkedHashMap<>();
+        result.put("status", "ERROR");
         result.put("error", ex.getMessage());
         result.put("exception", ex.getClass().getName());
         return result;

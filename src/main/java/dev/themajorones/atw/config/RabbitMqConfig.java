@@ -7,7 +7,6 @@ import org.springframework.amqp.rabbit.annotation.EnableRabbit;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import dev.themajorones.models.constants.RabbitMqConstant;
 import dev.themajorones.models.queue.RabbitMqTopology;
 
 @Configuration
