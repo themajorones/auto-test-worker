@@ -1,7 +1,10 @@
 package dev.themajorones.atw.config;
 
+import java.time.Duration;
+
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
 import dev.themajorones.models.client.AdbClient;
@@ -10,9 +13,15 @@ import dev.themajorones.models.client.DockerClient;
 @Configuration
 public class ConnectionClientConfig {
 
+    private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(5);
+    private static final Duration READ_TIMEOUT = Duration.ofSeconds(15);
+
     @Bean
     public RestClient.Builder restClientBuilder() {
-        return RestClient.builder();
+        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+        requestFactory.setConnectTimeout(CONNECT_TIMEOUT);
+        requestFactory.setReadTimeout(READ_TIMEOUT);
+        return RestClient.builder().requestFactory(requestFactory);
     }
 
     @Bean
