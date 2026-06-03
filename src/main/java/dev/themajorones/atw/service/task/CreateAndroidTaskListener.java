@@ -1,12 +1,13 @@
 package dev.themajorones.atw.service.task;
 
-import com.rabbitmq.client.Channel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.amqp.support.AmqpHeaders;
 import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Service;
+
+import com.rabbitmq.client.Channel;
 
 import dev.themajorones.atw.service.handler.CreateAndroidTaskHandler;
 import dev.themajorones.models.constants.RabbitMqConstant;
@@ -36,7 +37,7 @@ public class CreateAndroidTaskListener {
             taskMessageAckService.ack(channel, deliveryTag);
         } catch (Exception ex) {
             LOGGER.error("Failed to process create Android task command: {}", message, ex);
-            taskMessageAckService.nack(channel, deliveryTag, false);
+            taskMessageAckService.nack(channel, deliveryTag);
         }
     }
 }

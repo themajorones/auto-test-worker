@@ -7,7 +7,6 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import dev.themajorones.atw.repository.AndroidRepository;
 import dev.themajorones.atw.repository.DockerRepository;
@@ -23,7 +22,6 @@ import dev.themajorones.models.entity.TaskLog;
 import dev.themajorones.models.mapper.AndroidMapper;
 import dev.themajorones.models.util.JsonUtils;
 import lombok.RequiredArgsConstructor;
-import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
@@ -49,7 +47,6 @@ public class CreateAndroidTaskHandler implements TaskHandler {
     }
 
     @Override
-    @Transactional
     public void handle(TaskCommandEnvelope command) {
         TaskLog taskLog = taskLogRepository.findById(command.getTaskLogId()).orElseThrow(() -> new IllegalArgumentException("Task log not found"));
         taskLog.setStatus(TaskLogConstant.Status.RUNNING).setStartedAt(System.currentTimeMillis()).setEndedAt(null).setResult(null);
@@ -96,7 +93,7 @@ public class CreateAndroidTaskHandler implements TaskHandler {
             ), "Unable to serialize task result"));
             taskLogRepository.save(taskLog);
             LOG.info("Completed CreateAndroid task taskLogId={} androidId={} result=OK", taskLog.getId(), android.getId());
-        } catch (IllegalArgumentException | InterruptedException | JacksonException ex) {
+        } catch (Exception ex) {
             if (ex instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
