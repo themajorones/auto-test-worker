@@ -15,15 +15,20 @@ import dev.themajorones.atw.service.task.TaskHandler;
 import dev.themajorones.models.client.DockerClient;
 import dev.themajorones.models.constants.AndroidType;
 import dev.themajorones.models.constants.TaskLogConstant;
+import dev.themajorones.models.dto.CreateAndroidRequest;
 import dev.themajorones.models.dto.TaskCommandEnvelope;
 import dev.themajorones.models.entity.Android;
 import dev.themajorones.models.entity.Docker;
 import dev.themajorones.models.entity.TaskLog;
 import dev.themajorones.models.mapper.AndroidMapper;
 import dev.themajorones.models.util.JsonUtils;
+import static dev.themajorones.models.util.ValidationUtils.hasText;
+import static dev.themajorones.models.util.ValidationUtils.requireId;
+import static dev.themajorones.models.util.ValidationUtils.requireText;
 import lombok.RequiredArgsConstructor;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 
 @Service
 @RequiredArgsConstructor
@@ -57,32 +62,67 @@ public class CreateAndroidTaskHandler implements TaskHandler {
         Android android;
         try {
             JsonNode content = objectMapper.readTree(taskLog.getContent());
-            Integer androidId = content.path("androidId").intValue(0);
-            LOG.info("Loading Android record androidId={} taskLogId={}", androidId, taskLog.getId());
-            android = androidRepository.findById(androidId).orElseThrow(() -> new IllegalArgumentException("Android not found"));
-            if (!AndroidType.REDROID.name().equalsIgnoreCase(android.getType())) {
-                throw new IllegalArgumentException("ATW only supports Redroid Android tasks");
+            if (content instanceof ObjectNode objectNode) {
+                objectNode.remove("androidId");
             }
-            Docker docker = dockerRepository.findById(android.getDocker().getId()).orElseThrow(() -> new IllegalArgumentException("Docker connection not found"));
-
-            LOG.info("Checking Android image image={} dockerId={} taskLogId={}", android.getImage(), docker.getId(), taskLog.getId());
-            if (!dockerClient.imageExists(docker.getBaseUrl(), android.getImage())) {
-                LOG.info("Pulling Android image image={} dockerId={} taskLogId={}", android.getImage(), docker.getId(), taskLog.getId());
-                dockerClient.pullImage(docker.getBaseUrl(), android.getImage());
+            CreateAndroidRequest request = normalizeAndroidRequest(objectMapper.treeToValue(content, CreateAndroidRequest.class));
+            boolean updatingExistingRecord = content.hasNonNull("androidId");
+            Integer existingAndroidId = updatingExistingRecord ? content.path("androidId").intValue(0) : null;
+            if (updatingExistingRecord) {
+                LOG.info("Loading Android record androidId={} taskLogId={}", existingAndroidId, taskLog.getId());
+                android = androidRepository.findById(existingAndroidId).orElseThrow(() -> new IllegalArgumentException("Android not found"));
+                if (!AndroidType.REDROID.name().equalsIgnoreCase(android.getType())) {
+                    throw new IllegalArgumentException("ATW only supports Redroid Android tasks");
+                }
+            } else {
+                android = null;
             }
 
-            LOG.info("Creating Android container for androidId={} on dockerId={}", android.getId(), docker.getId());
-            String containerId = dockerClient.createAndroidContainer(docker.getBaseUrl(), android.getId(), android);
+            Docker docker = dockerRepository.findById(requireId(request.getDockerId(), "Docker connection id"))
+                .orElseThrow(() -> new IllegalArgumentException("Docker connection not found"));
 
-            LOG.info("Starting Android container for androidId={} with containerId={}", android.getId(), containerId);
+            LOG.info("Checking Android image image={} dockerId={} taskLogId={}", request.getImage(), docker.getId(), taskLog.getId());
+            if (!dockerClient.imageExists(docker.getBaseUrl(), request.getImage())) {
+                LOG.info("Pulling Android image image={} dockerId={} taskLogId={}", request.getImage(), docker.getId(), taskLog.getId());
+                dockerClient.pullImage(docker.getBaseUrl(), request.getImage());
+            }
+
+            String containerKey = updatingExistingRecord ? String.valueOf(existingAndroidId) : String.valueOf(taskLog.getId());
+            LOG.info("Creating Android container for containerKey={} on dockerId={}", containerKey, docker.getId());
+            String containerId = dockerClient.createAndroidContainer(docker.getBaseUrl(), containerKey, request);
+
+            LOG.info("Starting Android container for containerKey={} with containerId={}", containerKey, containerId);
             dockerClient.startContainer(docker.getBaseUrl(), containerId);
 
             Integer adbPort = waitForRunningContainer(docker, containerId);
             String adbHost = dockerClient.hostFromBaseUrl(docker.getBaseUrl());
-            LOG.info("Android container is running for androidId={} with adbHost={} and adbPort={}", android.getId(), adbHost, adbPort);
+            LOG.info("Android container is running for containerKey={} with adbHost={} and adbPort={}", containerKey, adbHost, adbPort);
 
-            android.setContainerId(containerId).setContainerName("tmos-android-" + android.getId()).setAdbHost(adbHost).setAdbPort(adbPort);
-            androidRepository.save(AndroidMapper.toRecord(android));
+            if (updatingExistingRecord) {
+                android.setDocker(docker)
+                    .setType(AndroidType.REDROID.name())
+                    .setName(requireText(request.getName(), "Android name"))
+                    .setImage(request.getImage())
+                    .setContainerId(containerId)
+                    .setContainerName("tmos-android-" + containerKey)
+                    .setAdbHost(adbHost)
+                    .setAdbPort(adbPort);
+                if (android.getDetails() == null) {
+                    android.setDetails(new dev.themajorones.models.entity.AndroidDetails());
+                }
+                android.getDetails()
+                    .setAccelerationMode(request.getAccelerationMode())
+                    .setWidth(request.getWidth())
+                    .setHeight(request.getHeight())
+                    .setDpi(request.getDpi());
+                androidRepository.save(AndroidMapper.toRecord(android));
+            } else {
+                android = androidRepository.save(AndroidMapper.fromRequest(request, docker)
+                    .setContainerId(containerId)
+                    .setContainerName("tmos-android-" + containerKey)
+                    .setAdbHost(adbHost)
+                    .setAdbPort(adbPort));
+            }
 
             taskLog.setStatus(TaskLogConstant.Status.SUCCESS).setEndedAt(System.currentTimeMillis()).setResult(JsonUtils.writeJson(objectMapper, Map.of(
                 "status", "OK",
@@ -102,6 +142,27 @@ public class CreateAndroidTaskHandler implements TaskHandler {
             taskLogRepository.save(taskLog);
             throw new IllegalStateException("Android creation failed", ex);
         }
+    }
+
+    private CreateAndroidRequest normalizeAndroidRequest(CreateAndroidRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("Android request is required");
+        }
+
+        if (!hasText(request.getType())) {
+            request.setType(AndroidType.REDROID.name());
+        }
+        request.setType(request.getType().trim().toUpperCase());
+        if (!AndroidType.REDROID.name().equals(request.getType())) {
+            throw new IllegalArgumentException("Android type must be REDROID for worker tasks");
+        }
+
+        request.setName(requireText(request.getName(), "Android name"));
+        request.setImage(requireText(request.getImage(), "Android image"));
+        request.setAccelerationMode(requireText(request.getAccelerationMode(), "Android acceleration mode"));
+        request.setAccelerationMode(request.getAccelerationMode().trim().toUpperCase());
+        request.setDockerId(requireId(request.getDockerId(), "Docker connection id"));
+        return request;
     }
 
     private Integer waitForRunningContainer(Docker docker, String containerId) throws InterruptedException {
