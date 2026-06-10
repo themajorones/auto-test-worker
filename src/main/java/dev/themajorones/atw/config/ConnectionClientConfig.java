@@ -1,10 +1,11 @@
 package dev.themajorones.atw.config;
 
 import java.time.Duration;
+import java.net.http.HttpClient;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
 import dev.themajorones.models.client.AdbClient;
@@ -18,8 +19,10 @@ public class ConnectionClientConfig {
 
     @Bean
     public RestClient.Builder restClientBuilder() {
-        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
-        requestFactory.setConnectTimeout(CONNECT_TIMEOUT);
+        HttpClient httpClient = HttpClient.newBuilder()
+            .connectTimeout(CONNECT_TIMEOUT)
+            .build();
+        JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(httpClient);
         requestFactory.setReadTimeout(READ_TIMEOUT);
         return RestClient.builder().requestFactory(requestFactory);
     }
