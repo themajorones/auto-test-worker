@@ -81,7 +81,7 @@ class CreateAndroidTaskHandlerTest {
         when(taskLogRepository.findById(99)).thenReturn(Optional.of(taskLog));
         when(taskLogRepository.save(any(TaskLog.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(dockerRepository.findById(7)).thenReturn(Optional.of(docker));
-        when(dockerClient.imageExists("http://docker.example", "redroid/redroid:latest")).thenReturn(false);
+        when(dockerClient.imageExists("http://docker.example", "redroid/redroid:latest")).thenReturn(false, true);
         when(dockerClient.createAndroidContainer(eq("http://docker.example"), eq("99"), any(CreateAndroidRequest.class))).thenReturn("container-1");
         when(dockerClient.isContainerRunning("http://docker.example", "container-1")).thenReturn(true);
         when(dockerClient.mappedAdbPort("http://docker.example", "container-1")).thenReturn(5555);

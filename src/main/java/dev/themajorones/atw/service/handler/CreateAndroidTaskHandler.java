@@ -37,6 +37,7 @@ public class CreateAndroidTaskHandler implements TaskHandler {
     private static final Logger LOG = LoggerFactory.getLogger(CreateAndroidTaskHandler.class);
 
     private static final Duration PORT_CHECK_TIMEOUT = Duration.ofSeconds(2);
+    private static final Duration IMAGE_PULL_TIMEOUT = Duration.ofMinutes(2);
     private static final long START_TIMEOUT_MILLIS = Duration.ofMinutes(3).toMillis();
     private static final long POLL_INTERVAL_MILLIS = Duration.ofSeconds(3).toMillis();
 
@@ -85,6 +86,7 @@ public class CreateAndroidTaskHandler implements TaskHandler {
             if (!dockerClient.imageExists(docker.getBaseUrl(), request.getImage())) {
                 LOG.info("Pulling Android image image={} dockerId={} taskLogId={}", request.getImage(), docker.getId(), taskLog.getId());
                 dockerClient.pullImage(docker.getBaseUrl(), request.getImage());
+                waitForImageAvailability(docker, request.getImage());
             }
 
             String containerKey = updatingExistingRecord ? String.valueOf(existingAndroidId) : String.valueOf(taskLog.getId());
@@ -179,6 +181,17 @@ public class CreateAndroidTaskHandler implements TaskHandler {
             Thread.sleep(POLL_INTERVAL_MILLIS);
         }
         throw new IllegalStateException("Timed out waiting for Android container port");
+    }
+
+    private void waitForImageAvailability(Docker docker, String image) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + IMAGE_PULL_TIMEOUT.toMillis();
+        while (System.currentTimeMillis() < deadline) {
+            if (dockerClient.imageExists(docker.getBaseUrl(), image)) {
+                return;
+            }
+            Thread.sleep(POLL_INTERVAL_MILLIS);
+        }
+        throw new IllegalStateException("Timed out waiting for Android image to be available");
     }
 
     private Map<String, Object> errorResult(Exception ex) {
