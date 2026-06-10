@@ -14,6 +14,10 @@ spring:
     host: wrapper
     username: admin
     password: admin
+    listener:
+      simple:
+        concurrency: 10
+        max-concurrency: 10
   security:
     oauth2:
       client:
