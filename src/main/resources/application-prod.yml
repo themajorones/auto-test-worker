@@ -6,5 +6,16 @@ spring:
   rabbitmq:
     port: 5672
 
+artifact:
+  storage:
+    endpoint: ${ARTIFACT_STORAGE_ENDPOINT}
+    region: ${ARTIFACT_STORAGE_REGION:us-east-1}
+    access-key: ${ARTIFACT_STORAGE_ACCESS_KEY}
+    secret-key: ${ARTIFACT_STORAGE_SECRET_KEY}
+    bucket: ${ARTIFACT_STORAGE_BUCKET:ats-artifacts}
+    prefix: ${ARTIFACT_STORAGE_PREFIX:}
+    path-style-access: ${ARTIFACT_STORAGE_PATH_STYLE_ACCESS:true}
+    create-bucket: ${ARTIFACT_STORAGE_CREATE_BUCKET:false}
+
 server:
   port: 8150

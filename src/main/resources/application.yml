@@ -18,6 +18,10 @@ spring:
       simple:
         concurrency: 10
         max-concurrency: 10
+  servlet:
+    multipart:
+      max-file-size: 150MB
+      max-request-size: 150MB
   security:
     oauth2:
       client:
@@ -37,3 +41,14 @@ security:
   encryption:
     password: ${ENCRYPTION_PASSWORD}
     salt: ${ENCRYPTION_SALT}
+
+artifact:
+  storage:
+    endpoint: ${ARTIFACT_STORAGE_ENDPOINT:}
+    region: ${ARTIFACT_STORAGE_REGION:us-east-1}
+    access-key: ${ARTIFACT_STORAGE_ACCESS_KEY:}
+    secret-key: ${ARTIFACT_STORAGE_SECRET_KEY:}
+    bucket: ${ARTIFACT_STORAGE_BUCKET:ats-artifacts}
+    prefix: ${ARTIFACT_STORAGE_PREFIX:}
+    path-style-access: ${ARTIFACT_STORAGE_PATH_STYLE_ACCESS:true}
+    create-bucket: ${ARTIFACT_STORAGE_CREATE_BUCKET:false}

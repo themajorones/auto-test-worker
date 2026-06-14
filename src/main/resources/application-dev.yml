@@ -6,5 +6,15 @@ spring:
   rabbitmq:
     port: 5673
 
+artifact:
+  storage:
+    endpoint: http://wrapper:9000
+    region: us-east-1
+    access-key: admin
+    secret-key: password
+    bucket: ats-artifacts
+    path-style-access: true
+    create-bucket: true
+
 server:
   port: 8250
