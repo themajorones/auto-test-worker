@@ -60,6 +60,8 @@ public class CreateAndroidTaskHandler implements TaskHandler {
 
         LOG.info("Received CreateAndroid task taskLogId={}", taskLog.getId());
 
+        Docker docker = null;
+        String containerId = null;
         Android android;
         try {
             JsonNode content = objectMapper.readTree(taskLog.getContent());
@@ -79,7 +81,7 @@ public class CreateAndroidTaskHandler implements TaskHandler {
                 android = null;
             }
 
-            Docker docker = dockerRepository.findById(requireId(request.getDockerId(), "Docker connection id"))
+            docker = dockerRepository.findById(requireId(request.getDockerId(), "Docker connection id"))
                 .orElseThrow(() -> new IllegalArgumentException("Docker connection not found"));
 
             LOG.info("Checking Android image image={} dockerId={} taskLogId={}", request.getImage(), docker.getId(), taskLog.getId());
@@ -91,7 +93,7 @@ public class CreateAndroidTaskHandler implements TaskHandler {
 
             String containerKey = updatingExistingRecord ? String.valueOf(existingAndroidId) : String.valueOf(taskLog.getId());
             LOG.info("Creating Android container for containerKey={} on dockerId={}", containerKey, docker.getId());
-            String containerId = dockerClient.createAndroidContainer(docker.getBaseUrl(), containerKey, request);
+            containerId = dockerClient.createAndroidContainer(docker.getBaseUrl(), containerKey, request);
 
             LOG.info("Starting Android container for containerKey={} with containerId={}", containerKey, containerId);
             dockerClient.startContainer(docker.getBaseUrl(), containerId);
@@ -140,6 +142,7 @@ public class CreateAndroidTaskHandler implements TaskHandler {
                 Thread.currentThread().interrupt();
             }
             LOG.error("Failed to create Android for taskLogId={}", taskLog.getId(), ex);
+            cleanupCreatedContainer(docker, containerId, taskLog.getId());
             taskLog.setStatus(TaskLogConstant.Status.FAILED).setResult(JsonUtils.writeJson(objectMapper, errorResult(ex), "Unable to serialize task result")).setEndedAt(System.currentTimeMillis());
             taskLogRepository.save(taskLog);
             throw new IllegalStateException("Android creation failed", ex);
@@ -192,6 +195,20 @@ public class CreateAndroidTaskHandler implements TaskHandler {
             Thread.sleep(POLL_INTERVAL_MILLIS);
         }
         throw new IllegalStateException("Timed out waiting for Android image to be available");
+    }
+
+    private void cleanupCreatedContainer(Docker docker, String containerId, Integer taskLogId) {
+        if (docker == null || !hasText(containerId)) {
+            return;
+        }
+        try {
+            dockerClient.inspectContainerJson(docker.getBaseUrl(), containerId);
+            LOG.info("Removing failed Android container containerId={} dockerId={} taskLogId={}", containerId, docker.getId(), taskLogId);
+            dockerClient.removeContainer(docker.getBaseUrl(), containerId);
+        } catch (Exception cleanupEx) {
+            LOG.warn("Unable to remove failed Android container containerId={} dockerId={} taskLogId={}",
+                containerId, docker.getId(), taskLogId, cleanupEx);
+        }
     }
 
     private Map<String, Object> errorResult(Exception ex) {

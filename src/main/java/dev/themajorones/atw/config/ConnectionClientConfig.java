@@ -15,7 +15,7 @@ import dev.themajorones.models.client.DockerClient;
 public class ConnectionClientConfig {
 
     private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(5);
-    private static final Duration READ_TIMEOUT = Duration.ofSeconds(15);
+    private static final Duration READ_TIMEOUT = Duration.ofMinutes(10);
 
     @Bean
     public RestClient.Builder restClientBuilder() {

@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -144,6 +145,47 @@ class CreateAndroidTaskHandlerTest {
             .isInstanceOf(IllegalStateException.class)
             .hasMessageContaining("Android creation failed");
 
+        verify(androidRepository, never()).save(any(Android.class));
+
+        ArgumentCaptor<TaskLog> taskLogCaptor = ArgumentCaptor.forClass(TaskLog.class);
+        verify(taskLogRepository, atLeastOnce()).save(taskLogCaptor.capture());
+        assertThat(taskLogCaptor.getAllValues().get(taskLogCaptor.getAllValues().size() - 1).getStatus())
+            .isEqualTo(TaskLogConstant.Status.FAILED);
+    }
+
+    @Test
+    void handleRemovesCreatedContainerWhenLaterStepFails() throws Exception {
+        CreateAndroidRequest request = new CreateAndroidRequest()
+            .setType(AndroidType.REDROID.name())
+            .setDockerId(7)
+            .setName("pixel")
+            .setImage("redroid/redroid:latest")
+            .setAccelerationMode("host");
+
+        TaskLog taskLog = new TaskLog()
+            .setId(99)
+            .setType(TaskLogConstant.Type.CREATE_ANDROID)
+            .setStatus(TaskLogConstant.Status.QUEUED)
+            .setContent(objectMapper.writeValueAsString(request));
+
+        Docker docker = new Docker()
+            .setId(7)
+            .setName("docker")
+            .setBaseUrl("http://docker.example");
+
+        when(taskLogRepository.findById(99)).thenReturn(Optional.of(taskLog));
+        when(taskLogRepository.save(any(TaskLog.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(dockerRepository.findById(7)).thenReturn(Optional.of(docker));
+        when(dockerClient.imageExists("http://docker.example", "redroid/redroid:latest")).thenReturn(true);
+        when(dockerClient.createAndroidContainer(eq("http://docker.example"), eq("99"), any(CreateAndroidRequest.class))).thenReturn("container-1");
+        doThrow(new IllegalStateException("startup failed")).when(dockerClient).startContainer("http://docker.example", "container-1");
+
+        assertThatThrownBy(() -> handler.handle(new TaskCommandEnvelope().setTaskLogId(99).setType(TaskLogConstant.Type.CREATE_ANDROID).setContent(taskLog.getContent())))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("Android creation failed");
+
+        verify(dockerClient).inspectContainerJson("http://docker.example", "container-1");
+        verify(dockerClient).removeContainer("http://docker.example", "container-1");
         verify(androidRepository, never()).save(any(Android.class));
 
         ArgumentCaptor<TaskLog> taskLogCaptor = ArgumentCaptor.forClass(TaskLog.class);
