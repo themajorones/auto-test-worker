@@ -16,6 +16,7 @@ env:
   DEPLOY_PATH: /opt/atw
   APP_PORT: 8250
   SPRING_PROFILE: dev
+  RUNTIME_IMAGE: tmos-runtime:fedora44-java25-node22
 
 jobs:
   build:
@@ -112,36 +113,25 @@ jobs:
           cp "$WAR_FILE" ./server.war
           ls -lh ./server.war
 
-      - name: Build Docker image
+      - name: Ensure runtime image
         shell: bash
         run: |
           set -euo pipefail
-          docker build \
-            --pull \
-            --file .github/workflows/Dockerfile.dev \
-            --build-arg WAR_FILE=server.war \
-            -t atw-dev:${GITHUB_SHA} \
-            -t atw-dev:latest \
-            .
 
-      - name: Close SSH connections and cleanup
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Kill any SSH connections using the app port
-          echo "${HOST_ROOT_PASSWORD}" | sudo -S lsof -ti:${APP_PORT} | xargs -r bash -c 'echo "${HOST_ROOT_PASSWORD}" | sudo -S kill -9 "$@" 2>/dev/null' _ || true
-          # Give it a moment for connections to close
-          sleep 2
+          if ! docker image inspect "${RUNTIME_IMAGE}" >/dev/null 2>&1; then
+            docker build \
+              --pull \
+              --file .github/workflows/Dockerfile.dev \
+              -t "${RUNTIME_IMAGE}" \
+              .
+          fi
 
-      - name: Deploy Docker container
+      - name: Create or update container
         shell: bash
         run: |
           set -euo pipefail
 
           CONTAINER_NAME="atw-dev"
-          IMAGE_NAME="atw-dev:${GITHUB_SHA}"
-
-          docker rm -f "$CONTAINER_NAME" || true
 
           ENV_FILE="${{ env.DEPLOY_PATH }}/.env"
           ENV_FILE_ARGS=()
@@ -149,19 +139,47 @@ jobs:
             ENV_FILE_ARGS+=(--env-file "$ENV_FILE")
           fi
 
-          docker run -d \
-            --name "$CONTAINER_NAME" \
-            -p "${APP_PORT}:${APP_PORT}" \
-            --add-host=wrapper:host-gateway \
-            "${ENV_FILE_ARGS[@]}" \
-            -e SPRING_PROFILES_ACTIVE="${SPRING_PROFILE}" \
-            -e CLIENT_ID \
-            -e CLIENT_SECRET \
-            -e ENCRYPTION_PASSWORD \
-            -e ENCRYPTION_SALT \
-            -e DEV_HOSTNAME \
-            --restart unless-stopped \
-            "$IMAGE_NAME"
+          if ! docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
+            docker create \
+              --name "$CONTAINER_NAME" \
+              -p "${APP_PORT}:${APP_PORT}" \
+              --add-host=wrapper:host-gateway \
+              "${ENV_FILE_ARGS[@]}" \
+              -e SERVER_PORT="${APP_PORT}" \
+              -e SPRING_PROFILES_ACTIVE="${SPRING_PROFILE}" \
+              -e CLIENT_ID \
+              -e CLIENT_SECRET \
+              -e ENCRYPTION_PASSWORD \
+              -e ENCRYPTION_SALT \
+              -e DEV_HOSTNAME \
+              --restart unless-stopped \
+              "${RUNTIME_IMAGE}"
+          fi
+
+      - name: Replace WAR in container
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker cp ./server.war "atw-dev:/app/server.war"
+
+      - name: Restart container
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if docker container inspect -f '{{.State.Running}}' atw-dev 2>/dev/null | grep -qx true; then
+            docker restart atw-dev
+          else
+            docker start atw-dev
+          fi
+
+      - name: Close SSH connections and cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "${HOST_ROOT_PASSWORD}" | sudo -S lsof -ti:${APP_PORT} | xargs -r bash -c 'echo "${HOST_ROOT_PASSWORD}" | sudo -S kill -9 "$@" 2>/dev/null' _ || true
+          sleep 2
 
       - name: Health check
         shell: bash
