@@ -132,12 +132,24 @@ jobs:
               .
           fi
 
+      - name: Close SSH connections and cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "${HOST_ROOT_PASSWORD}" | sudo -S lsof -ti:${APP_PORT} | xargs -r bash -c 'echo "${HOST_ROOT_PASSWORD}" | sudo -S kill -9 "$@" 2>/dev/null' _ || true
+          sleep 2
+
       - name: Create or update container
         shell: bash
         run: |
           set -euo pipefail
 
           CONTAINER_NAME="atw-prod"
+          EXISTING_IMAGE="$(docker container inspect -f '{{.Config.Image}}' "$CONTAINER_NAME" 2>/dev/null || true)"
+
+          if [ -n "$EXISTING_IMAGE" ] && [ "$EXISTING_IMAGE" != "${RUNTIME_IMAGE}" ]; then
+            docker rm -f "$CONTAINER_NAME"
+          fi
 
           ENV_FILE="${{ env.DEPLOY_PATH }}/.env"
           ENV_FILE_ARGS=()
@@ -183,13 +195,6 @@ jobs:
             docker start atw-prod
           fi
 
-      - name: Close SSH connections and cleanup
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "${HOST_ROOT_PASSWORD}" | sudo -S lsof -ti:${APP_PORT} | xargs -r bash -c 'echo "${HOST_ROOT_PASSWORD}" | sudo -S kill -9 "$@" 2>/dev/null' _ || true
-          sleep 2
-
       - name: Health check
         shell: bash
         run: |
@@ -200,5 +205,7 @@ jobs:
             fi
             sleep 2
           done
+          docker ps --filter name=atw-prod
+          docker inspect -f 'status={{.State.Status}} running={{.State.Running}} exitCode={{.State.ExitCode}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' atw-prod || true
           docker logs atw-prod --tail 200
           exit 1
