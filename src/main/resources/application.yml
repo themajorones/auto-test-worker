@@ -52,3 +52,11 @@ artifact:
     prefix: ${ARTIFACT_STORAGE_PREFIX:}
     path-style-access: ${ARTIFACT_STORAGE_PATH_STYLE_ACCESS:true}
     create-bucket: ${ARTIFACT_STORAGE_CREATE_BUCKET:false}
+
+vision:
+  gemini:
+    api-keys: ${VISION_GEMINI_API_KEYS:}
+    model: ${VISION_GEMINI_MODEL:gemini-3.1-flash-lite-preview}
+  openrouter:
+    api-keys: ${VISION_OPENROUTER_API_KEYS:}
+    model: ${VISION_OPENROUTER_MODEL:google/gemini-3.1-flash-lite-preview}

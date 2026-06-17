@@ -10,6 +10,7 @@ import org.springframework.web.client.RestClient;
 
 import dev.themajorones.models.client.AdbClient;
 import dev.themajorones.models.client.DockerClient;
+import dev.themajorones.models.client.OllamaClient;
 
 @Configuration
 public class ConnectionClientConfig {
@@ -30,6 +31,11 @@ public class ConnectionClientConfig {
     @Bean
     public DockerClient dockerClient(RestClient.Builder restClientBuilder) {
         return new DockerClient(restClientBuilder);
+    }
+
+    @Bean
+    public OllamaClient ollamaClient(RestClient.Builder restClientBuilder) {
+        return new OllamaClient(restClientBuilder);
     }
 
     @Bean

@@ -37,4 +37,24 @@ public class RabbitMqConfig {
     public Binding installApkBinding(Queue installApkQueue, DirectExchange directExchange) {
         return RabbitMqTopology.artifactBinding(installApkQueue, directExchange);
     }
+
+    @Bean
+    public Queue androidTestQueue() {
+        return RabbitMqTopology.androidTestQueue();
+    }
+
+    @Bean
+    public Binding androidTestBinding(Queue androidTestQueue, DirectExchange directExchange) {
+        return RabbitMqTopology.androidTestBinding(androidTestQueue, directExchange);
+    }
+
+    @Bean
+    public Queue taskProgressQueue() {
+        return RabbitMqTopology.taskProgressQueue();
+    }
+
+    @Bean
+    public Binding taskProgressBinding(Queue taskProgressQueue, DirectExchange directExchange) {
+        return RabbitMqTopology.taskProgressBinding(taskProgressQueue, directExchange);
+    }
 }
