@@ -10,8 +10,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -50,6 +48,7 @@ import dev.themajorones.models.entity.TaskLog;
 import dev.themajorones.models.util.JsonUtils;
 import dev.themajorones.models.util.ValidationUtils;
 import lombok.RequiredArgsConstructor;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 @Service
@@ -61,19 +60,6 @@ public class AndroidAutonomousTestTaskHandler implements TaskHandler {
     private static final int STAGNATION_LIMIT = 3;
     private static final Duration DEFAULT_SWIPE_DURATION = Duration.ofMillis(400);
     private static final Duration POST_ACTION_DELAY = Duration.ofSeconds(1);
-    private static final Pattern UI_CENTER = Pattern.compile("center=\\((\\d+),(\\d+)\\)");
-    private static final Pattern UI_TEXT = Pattern.compile("text=\"([^\"]*)\"");
-    private static final Pattern UI_DESC = Pattern.compile("desc=\"([^\"]*)\"");
-    private static final List<String> FALLBACK_CLICK_LABELS = List.of(
-        "allow",
-        "while using the app",
-        "only this time",
-        "ok",
-        "continue",
-        "yes",
-        "next",
-        "start"
-    );
 
     private final TaskLogRepository taskLogRepository;
     private final ArtifactRepository artifactRepository;
@@ -168,7 +154,8 @@ public class AndroidAutonomousTestTaskHandler implements TaskHandler {
                 try {
                     LOG.debug("Dumping UI hierarchy taskLogId={} step={} serial={}", taskLog.getId(), stepNumber, serial);
                     String xml = adbClient.dumpUiHierarchy(serial);
-                    String uiContext = uiHierarchyCompactor.compact(xml);
+                    UiHierarchyCompactor.UiHierarchyContext plannerUi = uiHierarchyCompactor.compactForPlanner(xml);
+                    String uiContext = plannerUi.prompt();
                     String uiHash = uiHierarchyCompactor.hash(uiContext);
                     if (uiHash.equals(previousHash)) {
                         repeatedHashCount++;
@@ -198,7 +185,7 @@ public class AndroidAutonomousTestTaskHandler implements TaskHandler {
                         vision.provider(),
                         vision.text() == null ? 0 : vision.text().length()
                     );
-                    AndroidTestDecision decision = decide(ollama, objective, result, stepNumber, uiContext, vision);
+                    AndroidTestDecision decision = decide(ollama, objective, result, stepNumber, plannerUi, vision);
                     step
                         .setForeground(safeForeground(serial))
                         .setUiHash(uiHash)
@@ -206,45 +193,37 @@ public class AndroidAutonomousTestTaskHandler implements TaskHandler {
                         .setVisionProvider(vision.provider())
                         .setVision(vision.text())
                         .setDecision(decision);
-                    inferMissingDecisionTarget(decision, uiContext, objective);
-                    validateDecision(decision);
+                    validateAndResolveDecision(decision, plannerUi);
                     finalDecision = decision;
                     LOG.info(
-                        "Ollama decision taskLogId={} step={} action={} state={} hasTarget={} hasSwipe={} inputTextLength={} reasoningLength={}",
+                        "Ollama decision taskLogId={} step={} action={} targetId={} finishResult={} hasTarget={} inputTextLength={} reasoningLength={}",
                         taskLog.getId(),
                         stepNumber,
                         decision.getAction(),
-                        decision.getState(),
+                        decision.getTargetId(),
+                        decision.getFinishResult(),
                         decision.getTarget() != null,
-                        decision.getSwipe() != null,
                         decision.getInputText() == null ? 0 : decision.getInputText().length(),
                         decision.getReasoning() == null ? 0 : decision.getReasoning().length()
                     );
 
-                    if ("SUCCESS".equals(decision.getState())) {
+                    if ("FINISH".equals(decision.getAction()) && "SUCCESS".equals(decision.getFinishResult())) {
                         LOG.info("Android test succeeded by model decision taskLogId={} step={}", taskLog.getId(), stepNumber);
                         completeStep(step, "Goal satisfied");
                         captureAndAttachStepImage(taskLog.getId(), step, serial);
                         finish(result, taskLog, TaskLogConstant.Status.SUCCESS, "SUCCESS", "Model reported success", step.getImageStorageKey());
                         return;
                     }
-                    if ("UNREACHABLE".equals(decision.getState())) {
+                    if ("FINISH".equals(decision.getAction()) && "UNREACHABLE".equals(decision.getFinishResult())) {
                         LOG.info("Android test unreachable by model decision taskLogId={} step={}", taskLog.getId(), stepNumber);
                         completeStep(step, "Goal unreachable");
                         captureAndAttachStepImage(taskLog.getId(), step, serial);
                         finish(result, taskLog, TaskLogConstant.Status.FAILED, "UNREACHABLE", "Model reported unreachable", step.getImageStorageKey());
                         return;
                     }
-                    if ("TERMINATE".equals(decision.getAction())) {
-                        LOG.info("Android test terminated by model action taskLogId={} step={} state={}", taskLog.getId(), stepNumber, decision.getState());
-                        completeStep(step, "Model terminated without success");
-                        captureAndAttachStepImage(taskLog.getId(), step, serial);
-                        finish(result, taskLog, TaskLogConstant.Status.FAILED, "UNREACHABLE", "Model terminated without success", step.getImageStorageKey());
-                        return;
-                    }
 
                     LOG.info("Executing Android test action taskLogId={} step={} action={}", taskLog.getId(), stepNumber, decision.getAction());
-                    String actionResult = executeDecision(serial, decision);
+                    String actionResult = executeDecision(serial, decision, plannerUi);
                     LOG.info("Android test action completed taskLogId={} step={} action={} result={}", taskLog.getId(), stepNumber, decision.getAction(), actionResult);
                     completeStep(step, actionResult);
                     result.setCompletedSteps(stepNumber);
@@ -321,56 +300,44 @@ public class AndroidAutonomousTestTaskHandler implements TaskHandler {
         String objective,
         AndroidTestRunResult run,
         int stepNumber,
-        String uiContext,
+        UiHierarchyCompactor.UiHierarchyContext plannerUi,
         VisionResult vision
     ) {
+        String uiContext = plannerUi.prompt();
+        String visionPrompt = visionPrompt(vision, uiContext);
         String prompt = """
-            You are an automated Android QA engine controlling a real Android device through ADB.
-            Respond with one JSON object matching the schema. Do not include markdown.
-            Required JSON shape:
-            {
-              "reasoning": "short reason",
-              "action": "CLICK|ENTER_TEXT|SWIPE|BACK|WAIT|TERMINATE",
-              "target": {"x": 0, "y": 0} or null,
-              "swipe": {"x1": 0, "y1": 0, "x2": 0, "y2": 0, "durationMs": 400} or null,
-              "inputText": "text to type" or null,
-              "state": "IN_PROGRESS|SUCCESS|UNREACHABLE"
-            }
+            You control an Android app through ADB. Return JSON only.
+            Actions: CLICK, ENTER_TEXT, SWIPE, BACK, WAIT, FINISH.
+            Valid targetIds: %s.
+            Use targetId only from Targets, never from Context. Never invent targetIds or coordinates.
+            Use CLICK for Button, CheckBox, Switch, RadioButton, and ImageButton targets.
+            Use ENTER_TEXT only for EditText targets and real text entry.
+            For permission/security dialogs, prefer SETTINGS, ALLOW, OK, YES, or CONTINUE when present.
+            Set finishResult only when action is FINISH; otherwise finishResult must be null.
+            Use FINISH only when the goal is visibly complete or impossible.
+            Normal actions never finish the task.
 
-            Goal:
+            Goal: %s
+            App: %s
+            Step: %d/%d
+            History:
             %s
 
-            Current app package:
+            UI:
             %s
-
-            Step:
-            %d of %d
-
-            Recent execution history:
             %s
-
-            Compacted UI tree:
-            %s
-
-            Vision annotations:
-            provider=%s
-            %s
-
-            Choose exactly one next action. Use CLICK/ENTER_TEXT/SWIPE/BACK/WAIT while state is IN_PROGRESS.
-            Use SUCCESS only when the goal is clearly achieved. Use UNREACHABLE when the goal cannot be completed.
-            Coordinates must come from UI bounds centers when possible.
             """.formatted(
+                validTargetIds(plannerUi),
                 objective,
                 nullToEmpty(run.getPackageName()),
                 stepNumber,
                 run.getMaxSteps(),
                 recentHistory(run.getSteps()),
-                truncate(uiContext, 12_000),
-                vision.provider(),
-                truncate(vision.text(), 4_000)
+                truncate(uiContext, 6_000),
+                StringUtils.hasText(visionPrompt) ? "\n" + visionPrompt : ""
             );
         LOG.debug("Calling Ollama for Android test decision ollamaId={} step={} promptLength={}", ollama.getId(), stepNumber, prompt.length());
-        String generated = ollamaClient.generateStructured(ollama.getBaseUrl(), ollama.getModel(), prompt, decisionSchema());
+        String generated = ollamaClient.generateStructured(ollama.getBaseUrl(), ollama.getModel(), prompt, decisionSchema(plannerUi));
         LOG.debug("Received Ollama decision payload ollamaId={} step={} payloadLength={}", ollama.getId(), stepNumber, generated.length());
         try {
             return objectMapper.readValue(generated, AndroidTestDecision.class);
@@ -379,26 +346,23 @@ public class AndroidAutonomousTestTaskHandler implements TaskHandler {
         }
     }
 
-    private Map<String, Object> decisionSchema() {
-        Map<String, Object> coordinate = objectSchema(Map.of(
-            "x", integerSchema(),
-            "y", integerSchema()
-        ), List.of("x", "y"));
-        Map<String, Object> swipe = objectSchema(Map.of(
-            "x1", integerSchema(),
-            "y1", integerSchema(),
-            "x2", integerSchema(),
-            "y2", integerSchema(),
-            "durationMs", integerSchema()
-        ), List.of("x1", "y1", "x2", "y2", "durationMs"));
+    private Map<String, Object> decisionSchema(UiHierarchyCompactor.UiHierarchyContext uiContext) {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("reasoning", Map.of("type", "string"));
-        properties.put("action", Map.of("type", "string", "enum", List.of("CLICK", "ENTER_TEXT", "SWIPE", "BACK", "WAIT", "TERMINATE")));
-        properties.put("target", nullable(coordinate));
-        properties.put("swipe", nullable(swipe));
+        properties.put("action", Map.of("type", "string", "enum", List.of("CLICK", "ENTER_TEXT", "SWIPE", "BACK", "WAIT", "FINISH")));
+        properties.put("targetId", targetIdSchema(uiContext));
         properties.put("inputText", Map.of("type", List.of("string", "null")));
-        properties.put("state", Map.of("type", "string", "enum", List.of("IN_PROGRESS", "SUCCESS", "UNREACHABLE")));
-        return objectSchema(properties, List.of("reasoning", "action", "target", "swipe", "inputText", "state"));
+        properties.put("finishResult", nullableStringEnum(List.of("SUCCESS", "UNREACHABLE")));
+        return objectSchema(properties, List.of("reasoning", "action", "targetId", "inputText", "finishResult"));
+    }
+
+    private Map<String, Object> targetIdSchema(UiHierarchyCompactor.UiHierarchyContext uiContext) {
+        Map<String, Object> schema = new LinkedHashMap<>();
+        List<Object> values = new ArrayList<>(uiContext.elements().keySet());
+        values.add(null);
+        schema.put("type", List.of("integer", "null"));
+        schema.put("enum", values);
+        return schema;
     }
 
     private Map<String, Object> objectSchema(Map<String, Object> properties, List<String> required) {
@@ -410,116 +374,269 @@ public class AndroidAutonomousTestTaskHandler implements TaskHandler {
         return schema;
     }
 
-    private Map<String, Object> integerSchema() {
-        return Map.of("type", "integer", "minimum", 0);
-    }
-
-    private Map<String, Object> nullable(Map<String, Object> schema) {
-        Map<String, Object> nullable = new LinkedHashMap<>(schema);
-        nullable.put("type", List.of("object", "null"));
+    private Map<String, Object> nullableStringEnum(List<String> values) {
+        Map<String, Object> nullable = new LinkedHashMap<>();
+        List<Object> enums = new ArrayList<>(values);
+        enums.add(null);
+        nullable.put("type", List.of("string", "null"));
+        nullable.put("enum", enums);
         return nullable;
     }
 
-    private void validateDecision(AndroidTestDecision decision) {
+    private String visionPrompt(VisionResult vision, String uiContext) {
+        if (vision == null || !StringUtils.hasText(vision.text())) {
+            return "";
+        }
+        String raw = stripMarkdownFence(vision.text()).strip();
+        String lowered = raw.toLowerCase(Locale.ROOT);
+        if (lowered.contains("vision unavailable")
+            || lowered.contains("no visual annotations")
+            || lowered.equals("no vision")
+            || lowered.equals("none")) {
+            return "";
+        }
+        String summary = summarizeVisionJson(raw);
+        if (!StringUtils.hasText(summary)) {
+            summary = raw.replaceAll("\\s+", " ");
+        }
+        summary = truncate(summary, 260);
+        if (!StringUtils.hasText(summary)) {
+            return "";
+        }
+        if (isRedundantVision(summary, uiContext)) {
+            return "";
+        }
+        return "Vision: " + summary;
+    }
+
+    private String summarizeVisionJson(String raw) {
+        try {
+            JsonNode root = objectMapper.readTree(raw);
+            List<String> parts = new ArrayList<>();
+            JsonNode visualState = root.path("visual_state");
+            if (visualState.isObject()) {
+                List<String> states = new ArrayList<>();
+                visualState.properties().forEach(entry -> {
+                    String value = entry.getValue().asString("");
+                    if (StringUtils.hasText(value)) {
+                        states.add(entry.getKey() + "=" + value);
+                    }
+                });
+                if (!states.isEmpty()) {
+                    parts.add("visual state: " + String.join(", ", states));
+                }
+            }
+            String errors = root.path("errors").asString("");
+            if (StringUtils.hasText(errors) && !"none".equalsIgnoreCase(errors.strip())) {
+                parts.add("errors: " + errors.strip());
+            }
+            JsonNode icons = root.path("non_text_icons");
+            if (icons.isArray() && !icons.isEmpty()) {
+                List<String> iconTexts = new ArrayList<>();
+                icons.forEach(icon -> {
+                    String value = icon.asString("");
+                    if (StringUtils.hasText(value)) {
+                        iconTexts.add(value.strip());
+                    }
+                });
+                if (!iconTexts.isEmpty()) {
+                    parts.add("icons: " + String.join(", ", iconTexts));
+                }
+            }
+            String screen = root.path("screen_context").asString("");
+            if (parts.isEmpty() && StringUtils.hasText(screen)) {
+                parts.add(screen.strip());
+            }
+            return String.join("; ", parts);
+        } catch (Exception ex) {
+            return "";
+        }
+    }
+
+    private boolean isRedundantVision(String summary, String uiContext) {
+        String normalizedSummary = summary.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9 ]", " ");
+        String normalizedUi = nullToEmpty(uiContext).toLowerCase(Locale.ROOT);
+        if (normalizedSummary.length() < 24 && normalizedUi.contains(normalizedSummary.strip())) {
+            return true;
+        }
+        return normalizedSummary.contains("screen context") && normalizedSummary.length() < 80;
+    }
+
+    private String stripMarkdownFence(String value) {
+        String text = nullToEmpty(value).strip();
+        if (text.startsWith("```")) {
+            text = text.replaceFirst("^```[a-zA-Z0-9_-]*\\s*", "");
+            text = text.replaceFirst("\\s*```$", "");
+        }
+        return text;
+    }
+
+    private void validateAndResolveDecision(AndroidTestDecision decision, UiHierarchyCompactor.UiHierarchyContext uiContext) {
         if (decision == null) {
             throw new IllegalStateException("Ollama decision is required");
         }
         String action = normalizeUpper(decision.getAction(), "Action");
-        String state = normalizeUpper(decision.getState(), "State");
-        decision.setAction(action).setState(state);
-        if (!List.of("CLICK", "ENTER_TEXT", "SWIPE", "BACK", "WAIT", "TERMINATE").contains(action)) {
+        decision.setAction(action);
+        if (StringUtils.hasText(decision.getFinishResult())) {
+            decision.setFinishResult(normalizeUpper(decision.getFinishResult(), "Finish result"));
+        }
+        if (!List.of("CLICK", "ENTER_TEXT", "SWIPE", "BACK", "WAIT", "FINISH").contains(action)) {
             throw new IllegalStateException("Unsupported action: " + action);
         }
-        if (!List.of("IN_PROGRESS", "SUCCESS", "UNREACHABLE").contains(state)) {
-            throw new IllegalStateException("Unsupported state: " + state);
-        }
-        if (!"IN_PROGRESS".equals(state)) {
+        if ("FINISH".equals(action)) {
+            if (!List.of("SUCCESS", "UNREACHABLE").contains(nullToEmpty(decision.getFinishResult()))) {
+                throw new IllegalStateException("FINISH requires finishResult SUCCESS or UNREACHABLE");
+            }
             return;
         }
-        if ("CLICK".equals(action) && decision.getTarget() == null) {
-            throw new IllegalStateException("CLICK requires target coordinates");
+        decision.setFinishResult(null);
+        if ("CLICK".equals(action) || "ENTER_TEXT".equals(action)) {
+            repairTargetedAction(decision, uiContext);
+            resolveTarget(decision, uiContext);
         }
-        if ("ENTER_TEXT".equals(action) && !StringUtils.hasText(decision.getInputText())) {
+        if ("ENTER_TEXT".equals(decision.getAction()) && !StringUtils.hasText(decision.getInputText())) {
             throw new IllegalStateException("ENTER_TEXT requires inputText");
         }
-        if ("SWIPE".equals(action) && decision.getSwipe() == null) {
-            throw new IllegalStateException("SWIPE requires swipe coordinates");
+    }
+
+    private void repairTargetedAction(AndroidTestDecision decision, UiHierarchyCompactor.UiHierarchyContext uiContext) {
+        UiHierarchyCompactor.UiElement selected = decision.getTargetId() == null ? null : uiContext.elements().get(decision.getTargetId());
+        if ("ENTER_TEXT".equals(decision.getAction())) {
+            if (selected != null && !isTextEntryTarget(selected)) {
+                UiHierarchyCompactor.UiElement textEntry = findFallbackTarget(decision, uiContext, true);
+                if (textEntry != null) {
+                    Integer previousTargetId = decision.getTargetId();
+                    decision.setTargetId(textEntry.id());
+                    appendRepairReason(decision, "target #" + previousTargetId + " is " + selected.type() + ", using EditText #" + textEntry.id());
+                    LOG.info(
+                        "Repaired Android test ENTER_TEXT target previousTargetId={} repairedTargetId={} selectedType={}",
+                        previousTargetId,
+                        textEntry.id(),
+                        selected.type()
+                    );
+                    return;
+                }
+                convertEnterTextToClick(decision, selected, "target #" + selected.id() + " is " + selected.type() + ", not EditText");
+                return;
+            }
+            if (selected == null && uiContext.elements().values().stream().noneMatch(this::isTextEntryTarget)) {
+                UiHierarchyCompactor.UiElement fallback = findFallbackTarget(decision, uiContext, false);
+                if (fallback != null) {
+                    convertEnterTextToClick(decision, fallback, "no EditText target is available");
+                    return;
+                }
+            }
+        }
+        if (selected == null) {
+            UiHierarchyCompactor.UiElement fallback = findFallbackTarget(decision, uiContext, "ENTER_TEXT".equals(decision.getAction()));
+            if (fallback != null) {
+                Integer previousTargetId = decision.getTargetId();
+                decision.setTargetId(fallback.id());
+                appendRepairReason(decision, "targetId #" + previousTargetId + " was unavailable, using #" + fallback.id() + " " + fallback.label());
+                LOG.info(
+                    "Repaired Android test targetId previousTargetId={} repairedTargetId={} repairedLabel={} action={}",
+                    previousTargetId,
+                    fallback.id(),
+                    fallback.label(),
+                    decision.getAction()
+                );
+            }
         }
     }
 
-    private void inferMissingDecisionTarget(AndroidTestDecision decision, String uiContext, String objective) {
-        if (decision == null || decision.getTarget() != null) {
+    private void convertEnterTextToClick(AndroidTestDecision decision, UiHierarchyCompactor.UiElement target, String reason) {
+        decision
+            .setAction("CLICK")
+            .setTargetId(target.id())
+            .setInputText(null);
+        appendRepairReason(decision, "converted ENTER_TEXT to CLICK because " + reason);
+        LOG.info("Repaired Android test action to CLICK targetId={} label={} reason={}", target.id(), target.label(), reason);
+    }
+
+    private UiHierarchyCompactor.UiElement findFallbackTarget(
+        AndroidTestDecision decision,
+        UiHierarchyCompactor.UiHierarchyContext uiContext,
+        boolean preferTextEntry
+    ) {
+        return uiContext.elements().values().stream()
+            .filter(element -> !preferTextEntry || isTextEntryTarget(element))
+            .max((left, right) -> Integer.compare(targetScore(left, decision, uiContext), targetScore(right, decision, uiContext)))
+            .filter(element -> targetScore(element, decision, uiContext) > Integer.MIN_VALUE / 2)
+            .orElse(null);
+    }
+
+    private int targetScore(
+        UiHierarchyCompactor.UiElement element,
+        AndroidTestDecision decision,
+        UiHierarchyCompactor.UiHierarchyContext uiContext
+    ) {
+        String label = nullToEmpty(element.label()).toLowerCase(Locale.ROOT);
+        String context = (nullToEmpty(decision.getReasoning()) + " "
+            + nullToEmpty(decision.getInputText()) + " "
+            + nullToEmpty(uiContext.prompt())).toLowerCase(Locale.ROOT);
+        int score = 0;
+        if (label.contains("cancel") || label.contains("deny") || label.contains("don't allow") || label.equals("no")) {
+            score -= 200;
+        }
+        if (label.contains("settings")) {
+            score += context.contains("security") || context.contains("unknown apps") || context.contains("allowed to install") ? 180 : 120;
+        }
+        if (label.contains("allow")) {
+            score += label.contains("don't allow") ? -200 : 160;
+        }
+        if (label.equals("ok") || label.contains("ok")) {
+            score += 120;
+        }
+        if (label.equals("yes") || label.contains("yes")) {
+            score += 110;
+        }
+        if (label.contains("continue") || label.contains("next")) {
+            score += 100;
+        }
+        if (label.contains("install")) {
+            score += 90;
+        }
+        if (label.contains("open") || label.contains("start")) {
+            score += 80;
+        }
+        if ("Button".equals(element.type())) {
+            score += 20;
+        }
+        if (isTextEntryTarget(element)) {
+            score += 10;
+        }
+        score -= Math.max(0, element.id() / 100);
+        return score;
+    }
+
+    private boolean isTextEntryTarget(UiHierarchyCompactor.UiElement element) {
+        return element != null && "EditText".equals(element.type());
+    }
+
+    private void appendRepairReason(AndroidTestDecision decision, String note) {
+        String current = nullToEmpty(decision.getReasoning()).strip();
+        String suffix = " Backend repaired decision: " + note + ".";
+        if (current.contains("Backend repaired decision:")) {
             return;
         }
-        String action = decision.getAction() == null ? "" : decision.getAction().trim().toUpperCase(Locale.ROOT);
-        if (!"CLICK".equals(action) && !"ENTER_TEXT".equals(action)) {
-            return;
-        }
-        UiTarget target = findFallbackTarget(uiContext, decision, objective);
-        if (target == null) {
-            return;
-        }
-        decision.setTarget(new AndroidTestCoordinate().setX(target.x()).setY(target.y()));
-        String reason = nullToEmpty(decision.getReasoning());
-        String suffix = "Fallback target inferred from UI node: " + target.label();
-        decision.setReasoning(StringUtils.hasText(reason) ? reason + " " + suffix : suffix);
-        LOG.info("Inferred missing Android test target action={} label={} x={} y={}", action, target.label(), target.x(), target.y());
+        decision.setReasoning(truncate((current + suffix).strip(), 1_000));
     }
 
-    private UiTarget findFallbackTarget(String uiContext, AndroidTestDecision decision, String objective) {
-        if (!StringUtils.hasText(uiContext)) {
-            return null;
+    private void resolveTarget(AndroidTestDecision decision, UiHierarchyCompactor.UiHierarchyContext uiContext) {
+        if (decision.getTargetId() == null) {
+            throw new IllegalStateException(decision.getAction() + " requires targetId");
         }
-        String intent = (nullToEmpty(objective) + " " + nullToEmpty(decision.getReasoning()) + " " + nullToEmpty(decision.getInputText()))
-            .toLowerCase(Locale.ROOT);
-        UiTarget firstClickable = null;
-        for (String line : uiContext.split("\\R")) {
-            if (!line.contains("center=(")) {
-                continue;
-            }
-            String lowered = line.toLowerCase(Locale.ROOT);
-            if (!lowered.contains("clickable=true") && !lowered.contains("focusable=true")) {
-                continue;
-            }
-            UiTarget target = parseTarget(line);
-            if (target == null) {
-                continue;
-            }
-            if (firstClickable == null) {
-                firstClickable = target;
-            }
-            String label = target.label().toLowerCase(Locale.ROOT);
-            if (FALLBACK_CLICK_LABELS.stream().anyMatch(label::contains)) {
-                return target;
-            }
-            if (StringUtils.hasText(label) && intent.contains(label)) {
-                return target;
-            }
+        UiHierarchyCompactor.UiElement element = uiContext.elements().get(decision.getTargetId());
+        if (element == null) {
+            throw new IllegalStateException("Unknown targetId: " + decision.getTargetId());
         }
-        return firstClickable;
+        if (element.centerX() == null || element.centerY() == null) {
+            throw new IllegalStateException("targetId has no coordinates: " + decision.getTargetId());
+        }
+        decision.setTarget(new AndroidTestCoordinate().setX(element.centerX()).setY(element.centerY()));
     }
 
-    private UiTarget parseTarget(String line) {
-        Matcher center = UI_CENTER.matcher(line);
-        if (!center.find()) {
-            return null;
-        }
-        String label = firstGroup(UI_TEXT.matcher(line));
-        if (!StringUtils.hasText(label)) {
-            label = firstGroup(UI_DESC.matcher(line));
-        }
-        return new UiTarget(
-            Integer.parseInt(center.group(1)),
-            Integer.parseInt(center.group(2)),
-            StringUtils.hasText(label) ? label : line.strip()
-        );
-    }
-
-    private String firstGroup(Matcher matcher) {
-        return matcher.find() ? matcher.group(1) : "";
-    }
-
-    private String executeDecision(String serial, AndroidTestDecision decision) {
+    private String executeDecision(String serial, AndroidTestDecision decision, UiHierarchyCompactor.UiHierarchyContext uiContext) {
         return switch (decision.getAction()) {
             case "CLICK" -> {
                 LOG.debug("ADB tap serial={} x={} y={}", serial, decision.getTarget().getX(), decision.getTarget().getY());
@@ -537,23 +654,25 @@ public class AndroidAutonomousTestTaskHandler implements TaskHandler {
                 yield "Input text";
             }
             case "SWIPE" -> {
-                var swipe = decision.getSwipe();
+                int x = uiContext.width() / 2;
+                int y1 = Math.max(1, (int) (uiContext.height() * 0.75));
+                int y2 = Math.max(1, (int) (uiContext.height() * 0.25));
                 LOG.debug(
                     "ADB swipe serial={} x1={} y1={} x2={} y2={} durationMs={}",
                     serial,
-                    swipe.getX1(),
-                    swipe.getY1(),
-                    swipe.getX2(),
-                    swipe.getY2(),
-                    swipe.getDurationMs()
+                    x,
+                    y1,
+                    x,
+                    y2,
+                    DEFAULT_SWIPE_DURATION.toMillis()
                 );
                 adbClient.swipe(
                     serial,
-                    swipe.getX1(),
-                    swipe.getY1(),
-                    swipe.getX2(),
-                    swipe.getY2(),
-                    Duration.ofMillis(swipe.getDurationMs() == null ? DEFAULT_SWIPE_DURATION.toMillis() : swipe.getDurationMs())
+                    x,
+                    y1,
+                    x,
+                    y2,
+                    DEFAULT_SWIPE_DURATION
                 );
                 yield "Swiped";
             }
@@ -653,7 +772,8 @@ public class AndroidAutonomousTestTaskHandler implements TaskHandler {
             .setVisionProvider(step.getVisionProvider())
             .setVisionText(step.getVision())
             .setAction(decision == null ? null : decision.getAction())
-            .setState(decision == null ? null : decision.getState())
+            .setState(decision == null ? null : firstText(decision.getFinishResult(), decision.getState()))
+            .setTargetElementId(decision == null ? null : decision.getTargetId())
             .setInputText(decision == null ? null : decision.getInputText())
             .setReasoning(decision == null ? null : decision.getReasoning())
             .setDecisionJson(decision == null ? null : JsonUtils.writeJson(objectMapper, decision, "Unable to serialize Android test decision"))
@@ -686,13 +806,24 @@ public class AndroidAutonomousTestTaskHandler implements TaskHandler {
             if (step.getDecision() == null) {
                 continue;
             }
-            history.add("step " + step.getStep() + ": "
-                + step.getDecision().getAction()
-                + " state=" + step.getDecision().getState()
-                + " result=" + nullToEmpty(step.getActionResult())
-                + " reason=" + nullToEmpty(step.getDecision().getReasoning()));
+            AndroidTestDecision decision = step.getDecision();
+            history.add(step.getStep() + " "
+                + decision.getAction()
+                + (decision.getTargetId() == null ? "" : " #" + decision.getTargetId())
+                + (StringUtils.hasText(decision.getFinishResult()) ? " " + decision.getFinishResult() : "")
+                + " -> " + truncate(nullToEmpty(step.getActionResult()), 80));
         }
         return history.isEmpty() ? "none" : String.join("\n", history);
+    }
+
+    private String validTargetIds(UiHierarchyCompactor.UiHierarchyContext uiContext) {
+        if (uiContext.elements().isEmpty()) {
+            return "none";
+        }
+        return uiContext.elements().keySet().stream()
+            .map(String::valueOf)
+            .reduce((left, right) -> left + ", " + right)
+            .orElse("none");
     }
 
     private String safeForeground(String serial) {
@@ -735,6 +866,10 @@ public class AndroidAutonomousTestTaskHandler implements TaskHandler {
 
     private String nullToEmpty(String value) {
         return value == null ? "" : value;
+    }
+
+    private String firstText(String first, String second) {
+        return StringUtils.hasText(first) ? first : StringUtils.hasText(second) ? second : null;
     }
 
     private void publishTaskLog(TaskLog taskLog, String eventType) {
@@ -780,8 +915,5 @@ public class AndroidAutonomousTestTaskHandler implements TaskHandler {
         } catch (IOException ex) {
             LOG.warn("Unable to delete temp file {}", path, ex);
         }
-    }
-
-    private record UiTarget(int x, int y, String label) {
     }
 }

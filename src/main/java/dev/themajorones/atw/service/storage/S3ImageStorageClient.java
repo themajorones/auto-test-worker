@@ -1,6 +1,7 @@
 package dev.themajorones.atw.service.storage;
 
 import java.io.InputStream;
+import java.io.IOException;
 import java.net.URI;
 
 import org.springframework.util.StringUtils;
@@ -76,14 +77,18 @@ public class S3ImageStorageClient implements ImageStorageClient {
 
     @Override
     public void putObject(String key, InputStream inputStream, long contentLength, String contentType) {
-        s3Client.putObject(
-            PutObjectRequest.builder()
-                .bucket(IMAGE_BUCKET)
-                .key(fullKey(key))
-                .contentType(StringUtils.hasText(contentType) ? contentType : "application/octet-stream")
-                .build(),
-            RequestBody.fromInputStream(inputStream, contentLength)
-        );
+        try {
+            s3Client.putObject(
+                PutObjectRequest.builder()
+                    .bucket(IMAGE_BUCKET)
+                    .key(fullKey(key))
+                    .contentType(StringUtils.hasText(contentType) ? contentType : "application/octet-stream")
+                    .build(),
+                RequestBody.fromBytes(inputStream.readAllBytes())
+            );
+        } catch (IOException ex) {
+            throw new IllegalStateException("Unable to read image object for upload", ex);
+        }
     }
 
     private String fullKey(String key) {
